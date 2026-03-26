@@ -40,6 +40,29 @@ def remove_noise(
     3. smooths along time using isotonic regression,
     4. smooths along space using isotonic regression + spline,
     5. restores the original NaN positions.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing one root profile with a distance column
+        ('DistanceFromDistalPart') and multiple time columns
+        ('CD2O_Root_t...').
+    fig_name : str, optional
+        Name of the figure, currently only kept for compatibility and
+        potential plotting/debugging.
+    time_window : int, optional
+        Window size for temporal median filtering before isotonic regression.
+    spatial_median_window : int, optional
+        Window size for spatial median filtering before isotonic regression.
+    smooth_factor : float, optional
+        Scaling factor for spline smoothing in space.
+    n_iter : int, optional
+        Number of alternating time/space smoothing iterations.
+
+    Returns
+    -------
+    pd.DataFrame
+        Cleaned DataFrame with the same structure as the input.
     """
     if df["DistanceFromDistalPart"].isnull().any():
         LOGGER.warning("Dropping rows with NaN in 'DistanceFromDistalPart'.")
@@ -60,6 +83,16 @@ def remove_noise(
 
         First interpolation is done row-wise (time direction),
         then column-wise (space direction).
+        
+        Parameters
+        ----------
+        matrix : np.ndarray
+            2D array of concentration values with possible NaNs.
+
+        Returns
+        -------
+        np.ndarray
+            Array where NaNs are temporarily filled for smoothing.
         """
         mat = matrix.copy()
 
@@ -83,6 +116,16 @@ def remove_noise(
 
         Median filtering removes spikes, then isotonic regression enforces
         monotonic increase in time.
+
+        Parameters
+        ----------
+        matrix : np.ndarray
+            2D array with space along rows and time along columns.
+
+        Returns
+        -------
+        np.ndarray
+            Time-smoothed array.
         """
         smoothed = np.zeros_like(matrix)
 
@@ -102,6 +145,16 @@ def remove_noise(
         Median filtering removes local spikes,
         isotonic regression enforces monotone non-increasing shape,
         and a spline provides a smoother final profile.
+
+        Parameters
+        ----------
+        matrix : np.ndarray
+            2D array with space along rows and time along columns.
+
+        Returns
+        -------
+        np.ndarray
+            Space-smoothed array.
         """
         smoothed = np.zeros_like(matrix)
 
@@ -150,6 +203,25 @@ def read_obs(
     - defines time zero based on D2O arrival,
     - selects spatial and temporal subsets,
     - stores everything in a nested dictionary.
+
+    Parameters
+    ----------
+    sample : str
+        Sample name, for example 's_d_4'.
+    base_dir : Path
+        Base directory containing sample folders and shared input files
+        such as 'mean_r.xlsx'.
+    compartments : list[str]
+        List of compartments to process, e.g.
+        ['compartment4', 'compartment3', 'compartment2'].
+    nr_obs_space_sel : int
+        Number of spatial positions to retain for fitting after subsampling.
+
+    Returns
+    -------
+    dict[str, dict[str, dict[str, Any]]]
+        Nested dictionary:
+        obs[compartment][root_id] = root-specific observation data.
     """
     obs: dict[str, dict[str, dict[str, Any]]] = {}
 
@@ -260,6 +332,24 @@ def read_obs(
                 Select a subset of time profiles that best represents total profile evolution.
 
                 The selection is based on cumulative change between consecutive profiles.
+
+                Parameters
+                ----------
+                c_d2o_obs_local : np.ndarray
+                    2D observed concentration matrix for one root.
+                t_obs_local : np.ndarray
+                    Observation times corresponding to the columns.
+                distance_local : np.ndarray
+                    Distances corresponding to the rows.
+                fig_name_local : str
+                    Figure name placeholder, currently only kept for compatibility.
+                n_select : int
+                    Number of representative time profiles to select.
+
+                Returns
+                -------
+                np.ndarray
+                    Array of selected time indices.
                 """
                 data = c_d2o_obs_local
                 n_dist, n_time = data.shape
@@ -353,6 +443,18 @@ def read_obs(
 def computing_obj_func(obs: np.ndarray, fit: np.ndarray) -> float:
     """
     Compute the scalar objective function used for optimization.
+
+    Parameters
+    ----------
+    obs : np.ndarray
+        Observed concentration matrix.
+    fit : np.ndarray
+        Simulated concentration matrix on the same grid as `obs`.
+
+    Returns
+    -------
+    float
+        Scalar objective value based on variance-normalized SSE.
     """
     obs = np.array(obs)
     fit = np.array(fit)
@@ -375,6 +477,17 @@ def save_data(base_dir: Path, sample: str, fits: dict, obs: dict) -> None:
     Each root gets two sheets:
     - observed profiles
     - fitted profiles
+    
+    Parameters
+    ----------
+    base_dir : Path
+        Base data directory.
+    sample : str
+        Sample name.
+    fits : dict
+        Nested dictionary containing simulated profiles.
+    obs : dict
+        Nested dictionary containing observed profiles.
     """
     for comp_nr in fits.keys():
         foldername = base_dir / sample / f"D2O_{comp_nr}"
@@ -407,6 +520,20 @@ def save_data(base_dir: Path, sample: str, fits: dict, obs: dict) -> None:
 def create_diffusion_profile(z: np.ndarray, diffusion_fit_file: Path, sample: str) -> np.ndarray:
     """
     Create a linear diffusion profile from treatment-specific fit parameters.
+    
+    Parameters
+    ----------
+    z : np.ndarray
+        Axial coordinate array.
+    diffusion_fit_file : Path
+        Path to the Excel file containing fitted diffusion coefficients.
+    sample : str
+        Sample name; the treatment is inferred from `sample[:3]`.
+
+    Returns
+    -------
+    np.ndarray
+        Diffusion profile evaluated at `z`.
     """
     def linear_model(x: np.ndarray, a: float, b: float) -> np.ndarray:
         return a * x + b
@@ -425,6 +552,27 @@ def interp_new(
     new_z: np.ndarray,
     new_t: np.ndarray,
 ) -> np.ndarray:
+    """
+    Interpolate a simulated concentration field onto a new grid.
+
+    Parameters
+    ----------
+    c_d2o_sim : np.ndarray
+        Simulated concentration field defined on (`z_sim`, `t_sim`).
+    z_sim : np.ndarray
+        Original spatial grid.
+    t_sim : np.ndarray
+        Original time grid.
+    new_z : np.ndarray
+        Target spatial grid.
+    new_t : np.ndarray
+        Target time grid.
+
+    Returns
+    -------
+    np.ndarray
+        Interpolated concentration field on (`new_z`, `new_t`).
+    """
     interp_func = RegularGridInterpolator(
         (z_sim, t_sim),
         c_d2o_sim,
@@ -444,6 +592,18 @@ def create_axial_profile(z: np.ndarray, x: dict[str, float]) -> np.ndarray:
 
     Velocity is modeled as:
     jx_base + a * z
+
+    Parameters
+    ----------
+    z : np.ndarray
+        Axial coordinate array.
+    x : dict[str, float]
+        Parameter dictionary containing 'jx_base' and 'a'.
+
+    Returns
+    -------
+    np.ndarray
+        Axial velocity profile evaluated at `z`.
     """
     return x["jx_base"] + x["a"] * z
 
@@ -451,6 +611,19 @@ def create_axial_profile(z: np.ndarray, x: dict[str, float]) -> np.ndarray:
 def precompute_z_map(z: np.ndarray, new_z: np.ndarray):
     """
     Precompute indices and interpolation weights for fast 1D interpolation in z.
+
+    Parameters
+    ----------
+    z : np.ndarray
+        Original regular spatial grid.
+    new_z : np.ndarray
+        Target spatial coordinates.
+
+    Returns
+    -------
+    tuple
+        (i0, i1, w) where i0 and i1 are neighboring indices in `z`
+        and w is the interpolation weight.
     """
     dz = z[1] - z[0]
     s = (new_z - z[0]) / dz
@@ -482,6 +655,32 @@ def calc_obj_fct(
     - interpolates the solution back to observed positions,
     - stores the simulated profiles,
     - returns the scalar misfit.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Parameter vector in the order [jx_base, a, gamma].
+    comp_nr : str
+        Compartment identifier.
+    root_nr : str
+        Root identifier within the compartment.
+    obs : dict
+        Nested observation dictionary.
+    fits : dict
+        Nested dictionary where simulated profiles are stored.
+    obj_func_scalar : Any
+        Compatibility flag preserved from the original script.
+    dz0 : float
+        Axial discretization size in cm.
+    cf_xylem : float
+        Cross-sectional fraction of the root that is assigned to xylem.
+    solver_max_step : float
+        Maximum internal time step for `solve_ivp`.
+
+    Returns
+    -------
+    float
+        Scalar objective value for the current parameter set.
     """
     global BEST_OBJ
 
@@ -556,6 +755,18 @@ def calc_obj_fct(
         - axial diffusion in xylem,
         - axial advection in xylem,
         - exchange between xylem and tissue.
+        
+        Parameters
+        ----------
+        t : float
+            Current simulation time.
+        y : np.ndarray
+            Current state vector containing xylem and tissue concentrations.
+
+        Returns
+        -------
+        np.ndarray
+            Time derivative of the state vector.
         """
         cx = y[:nz]
         ct = y[nz:]
@@ -636,6 +847,19 @@ def calc_obj_fct(
 def plot_results(obs: dict, fits: dict, sample: str, outpath: Path | None = None, ncols: int = 4) -> None:
     """
     Plot observed and simulated profiles for all roots in all compartments.
+
+    Parameters
+    ----------
+    obs : dict
+        Nested observation dictionary.
+    fits : dict
+        Nested dictionary containing simulated profiles.
+    sample : str
+        Sample name, currently only kept for compatibility.
+    outpath : Path | None, optional
+        Output path for saving the figure. If None, the figure is not saved.
+    ncols : int, optional
+        Number of subplot columns.
     """
     n_plots = sum(len(fits[comp_nr]) for comp_nr in fits.keys())
     nrows = math.ceil(n_plots / ncols)
@@ -704,6 +928,32 @@ def minimize_inverse_model(
 
     1. Differential evolution for global search
     2. TNC refinement for local polishing
+
+    Parameters
+    ----------
+    x : dict[str, float]
+        Initial parameter guess dictionary with keys 'jx_base', 'a', and 'gamma'.
+    bound : dict[str, tuple[float, float]]
+        Parameter bounds dictionary.
+    comp_nr : str
+        Compartment identifier.
+    root_nr : str
+        Root identifier.
+    obs : dict
+        Nested observation dictionary.
+    fits : dict
+        Nested dictionary where simulated profiles are stored.
+    dz0 : float
+        Axial discretization size in cm.
+    cf_xylem : float
+        Xylem cross-sectional fraction.
+    solver_max_step : float
+        Maximum internal time step for the ODE solver.
+
+    Returns
+    -------
+    dict[str, float]
+        Optimized parameter dictionary.
     """
     param_names = ["jx_base", "a", "gamma"]
     bounds_list = [bound["jx_base"], bound["a"], bound["gamma"]]
@@ -777,6 +1027,25 @@ def run_sample(
     - fits each root in each compartment,
     - stores fitted parameters,
     - writes plots and Excel outputs.
+
+    Parameters
+    ----------
+    sample : str
+        Sample name.
+    base_dir : Path
+        Base directory containing all input and output folders.
+    diffusion_fit_file : Path
+        Path to the diffusion-fit file; currently passed through for compatibility.
+    compartments : list[str]
+        Compartments to process.
+    dz0 : float
+        Axial discretization size in cm.
+    solver_max_step : float
+        Maximum time step used in the ODE solver.
+    nr_obs_space_sel : int
+        Number of spatial observation points retained for fitting.
+    cf_xylem : float
+        Xylem cross-sectional fraction.
     """
     global BEST_OBJ
 
